@@ -1,0 +1,539 @@
+---
+title: "MIS748 Group Project test"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+setwd('/Users/chrissymo/Documents/MSIS/SPRING 2022/MIS 748/Rfiles')
+library(tseries)
+library(TSA)
+library(tsoutliers)
+library("readxl")
+library(lmtest)
+```
+
+## data transform and identify the possible models
+
+```{r cars}
+#gas = read.csv("MONTHLY_GAS_V2.csv")
+gas = read_excel("MONTHLY_GAS_V3.xlsx")
+#time = as.Date(gas$DATE,tryFormats = "%Y-%m-%d")
+x.all = ts(gas$GASREGW,start = c(1991,2),frequency = 12)
+date = time(x.all)
+#use the data from 1991-02 to 2021-09 for training, and predict 2021-10 to 2022-03 (6 months)
+x = ts(gas$GASREGW[1:368],start = c(1991,2),frequency = 12)
+
+par(mfrow = c(1, 3))
+plot(x,type="l",main="Gas price trend",xlab = "time",ylab = "price")#non constant mean and variance
+acf(x,lag.max = 60)#decays very slow, may have unit root, not stationary
+pacf(x,lag.max = 60)
+adf.test((x)) #pvalue=0.6781
+
+#log transform
+logx = log(x)
+plot(logx,type="l",main="log gas price",xlab = "time",ylab = "log(price)")
+acf(logx,lag.max = 60)
+pacf(logx,lag.max = 60)
+adf.test(logx)#p-value = 0.7308,can't reject null, has unit root
+
+#take difference
+dlogx = diff(logx)
+par(mfrow = c(1, 3))
+plot(dlogx,type="l",main="first diff of log gas price")
+acf(dlogx,lag.max = 60)#it looks seasonality at 1s(1 year)
+pacf(dlogx,lag.max = 60)
+adf.test(dlogx) #pvalue=0.01<0.05, reject null, do not have unit root
+
+#take seasonality difference
+ddlogx = diff(dlogx,12)
+plot(ddlogx,type="l",main="Regular&Seasonality difference of log gas price")
+acf(ddlogx,lag.max = 60)
+pacf(ddlogx,lag.max = 60)#SAR(3),SMA(2),SMA(4)
+#adf.test(ddlogx)
+#eacf(ddlogx,13,13)#ARMA(5,5)
+
+###seasonality check #####
+par(mfrow = c(1, 1))
+boxplot(x~cycle(x), names=c("Jan", "Feb", "Mar", "Apr", "May", "June", "July", "Aug", "Sep", "Oct", "Nov", "Dec"))
+###outliers check#######
+
+
+```
+
+#Seasonality
+
+```{r}
+#SAR(3)
+out1 = arima(ddlogx,order = c(0,0,0),seasonal = list(order = c(3, 0, 0),period=12))
+out1#aic = -990.06
+par(mfrow = c(1, 2))
+acf(out1$residuals, lag = 60)
+pacf(out1$residuals, lag = 60)
+
+#SMA(2)
+out2 = arima(ddlogx,order = c(0,0,0),seasonal = list(order = c(0, 0, 2),period=12))
+out2#aic = -1037.91
+par(mfrow = c(1, 2))
+acf(out2$residuals, lag = 60)
+pacf(out2$residuals, lag = 60)
+
+
+#SMA(4)
+out3 = arima(ddlogx,order = c(0,0,0),seasonal = list(order = c(0, 0, 4),period=12))
+out3#aic = -1038.58
+par(mfrow = c(1, 2))
+acf(out3$residuals, lag = 60, main="ACF of SMA(4)")#MA(1)
+pacf(out3$residuals, lag = 60, main="PACF of SMA(4)")#AR(2)
+eacf(out3$residuals)
+
+
+```
+
+#
+#
+```{r}
+#ARIMA(2,1,0) X (0,1,2)
+out4 = arima(logx, order = c(2, 1, 0),seasonal = list(order = c(0, 1, 2),period=12))
+out4
+#ARIMA(0,1,1) X (0,1,2)-->BEST
+out5 = arima(logx, order = c(0, 1, 1),seasonal = list(order = c(0, 1, 2),period=12))
+out5
+#ARIMA(2,1,0) X (0,1,4)
+out6 = arima(logx, order = c(2, 1, 0),seasonal = list(order = c(0, 1, 4),period=12))
+out6
+#ARIMA(0,1,1) X (0,1,4)
+out7 = arima(logx, order = c(0, 1, 1),seasonal = list(order = c(0, 1, 4),period=12))
+out7
+
+coeftest(out5)
+par(mfrow = c(1, 3))
+plot(out5$residuals,type = 'l', main = 'Residuals for ARIMA(0,1,1) X (0,1,2)')
+acf(out5$residuals,lag.max = 60, main = 'ACF of Residuals')
+pacf(out5$residuals,lag.max = 60, main = 'PACF of Residuals')
+Box.test(out5$residuals, type='Ljung',lag=12)#p > 0.05
+
+```
+
+#one step rolling forecast
+#ARIMA(0,1,1) X (0,1,2)-->better
+```{r pressure, echo=FALSE}
+#one step ahead rolling forecast
+source("rolling.forecast.R")
+#ARIMA(2,1,0) X (0,1,2)
+rolling.forecast(logx,1,length(logx)-100,c(2, 1, 0),seasonal = list(order=c(0,1,2),period=12))
+
+##ARIMA(0,1,1) X (0,1,2)
+rolling.forecast(logx,1,length(logx)-100,c(0, 1, 1),seasonal = list(order=c(0,1,2),period=12))
+
+#ARIMA(2,1,0) X (0,1,4)
+rolling.forecast(logx,1,length(logx)-100,c(2, 1, 0),seasonal = list(order=c(0,1,4),period=12))
+
+##ARIMA(0,1,1) X (0,1,4)
+rolling.forecast(logx,1,length(logx)-100,c(0, 1, 1),seasonal = list(order=c(0,1,4),period=12))
+```
+
+##regular prediction
+```{r}
+pp = predict(out5, 6)
+pred = exp(pp$pred)   #prediction
+pred.upp = exp(pp$pred+2*pp$se)  #upper bound for prediction
+pred.low = exp(pp$pred-2*pp$se)  #lower bound for prediction
+rr = range(c(gas$GASREGW, pred, pred.upp, pred.low))	#find the minimum and maximum y values in your plot
+#pred.time = c(as.Date("2022-04-04"),as.Date("2022-04-11"),as.Date("2022-04-18"),as.Date("2022-04-25"))
+
+par(mfrow = c(1, 1))
+##plot original data 
+plot(x.all,type="l",main="Gas price prediction",xlab = "time",ylab = "price",ylim = rr)
+points(x.all,pch=3)
+##add prediction
+lines(pred,col="blue")
+points(pred,col="blue",pch=2)
+lines(pred.upp, lty=2, col='blue')	#upper bound of predicted interval
+lines(pred.low, lty=2, col='blue')	#lower bound of predicted interval
+##add fitted value
+lines(fitted.values(out5), col="red",lty=2)
+points(fitted.values(out5), col="red",pch=2)
+
+legend.text=c("Actual values","Prediction","Fitted values")
+legend("topleft", legend.text, lty = c(1,1,2), col = c("black","blue","red"), pch = c(3,2,2))
+
+#axis(1, total.time, format(total.time,"%Y-%m-%d"),cex.axis=.7)
+#lines(xxx.time, xxx)	#observed values
+#points(pred.time, pred, pch=2, col='red', type='o')	#predicted values
+
+
+pred
+pred.upp
+pred.low
+
+```
+
+
+
+##intervention analysis using ARIMA(0,1,1) X (0,1,2)
+#Financial Crisis of 2007-2009, set Sept 2008 as 1, since the bankruptcy of Lehman Brothers
+```{r}
+fc.temp = ts(gas$financial_crisis_temp[1:368],start=c(1991,2),frequency = 12)
+fc.perm = ts(gas$financial_crisis_perm[1:368],start=c(1991,2),frequency = 12)
+n = 368
+n1 = 211
+#fc.temp = ts(c(rep(0, n1), 1, rep(0, n-n1-1)), start=c(1991,2), frequency=12) #with order(1,0) gradually gone, with order(0,0) a one-time change
+#fc.perm=ts(c(rep(0, n1), rep(1, n-n1)), start=c(1991,2), frequency=12) #with order (0, 0), step change with order (0,1) gradually increase then stable
+
+
+order = c(0,1,1)
+seasonal=list(order=c(0,1,2), period=12)
+
+out5.1 = arimax(logx, order=order ,seasonal = seasonal, method="ML")
+out5.1
+#Permanant change
+out7 = arimax(logx, order=order,seasonal = seasonal, xtransf=data.frame(fc.perm), transfer=list(c(0,0)), method="ML")
+out7
+#Temporary change
+out8 = arimax(logx, order=order,seasonal = seasonal, xtransf=data.frame(fc.temp), transfer=list(c(1,0)), method="ML")
+out8
+#Temporary &Permanant change
+out9 = arimax(logx, order=order,seasonal = seasonal, xtransf=data.frame(fc.temp, fc.perm), transfer=list(c(1,0), c(0,0)), method="ML")
+out9
+aic = c(out5.1$aic,out7$aic,out8$aic,out9$aic)
+#
+which.min(aic) #4
+coeftest(out9)
+
+# Total impact
+tc = filter(fc.temp, filter=out9$coef[4],method='recursive',side=1)*out9$coef[5]  #the impact of temporary change, exponential decay
+ls = ts(c(rep(0,n1), rep(out9$coef[6],n-n1)), start=c(1991,2), frequency=12)   #the impact of the permanent change
+
+#pdf("impact.pdf", width=8, height=6)
+plot(tc+ls, type='o', xlim=c(2008,2010), ylab='impact')
+
+```
+
+
+#try to do predict using intervention, the performance is not good.
+```{r}
+#1991-02 to 2009-02, prediction 2009-03 to 2009-09 (6 months)
+x.fc = ts(gas$GASREGW[1:217],start=c(1991,2),frequency = 12)
+n.fc = length(x.fc)
+n.fc1 = 211
+x.fc1 = ts(gas$GASREGW[1:n.fc1],start=c(1991,2),frequency = 12)
+out.fc1 = arima(log(x.fc1),order=c(0,1,1),seasonal=list(order=c(0,1,2), period=12))
+#box test reject null, so increase order
+out.fc1 = arima(log(x.fc1),order=c(0,1,2),seasonal=list(order=c(0,1,2), period=12))
+
+pulse = ts(c(rep(0, n.fc1), 1, rep(0, n.fc-n.fc1-1)), start=c(1991,2), frequency=12) #with order(1,0) gradually gone, with order(0,0) a one-time change
+step=ts(c(rep(0, n.fc1), rep(1, n.fc-n.fc1)), start=c(1991,2), frequency=12) #with order (0, 0), step change with order (0,1) gradually increase then stable
+
+order=c(0,1,1)
+seasonal=list(order=c(0,1,2), period=12)
+
+
+m00= arimax(log(x.fc), order=order, seasonal=seasonal, method="ML")
+m00
+
+m01= arimax(log(x.fc), order=order, seasonal=seasonal, xtransf=data.frame(step), transfer=list(c(0,0)), method="ML")
+m01
+m10= arimax(log(x.fc), order=order, seasonal=seasonal, xtransf=data.frame(pulse), transfer=list(c(1,0)), method="ML")
+m10
+m11= arimax(log(x.fc), order=order, seasonal=seasonal, xtransf=data.frame(pulse, step), transfer=list(c(1,0), c(0,0)), method="ML")
+m11
+
+aic.fc=c(m00$aic, m01$aic, m10$aic, m11$aic)
+model=list(m00, m01, m10, m11)
+which.min(aic.fc)
+model[which.min(aic.fc)]
+
+tc = filter(pulse, filter=m11$coef[4],method='recursive',side=1)*m11$coef[5]  #the impact of temporary change, exponential decay
+ls = ts(c(rep(0,n.fc1), rep(m11$coef[6], n.fc-n.fc1)), start=c(1991,2), frequency=12) 
+
+m.pred = arima(log(x.fc), order=order, seasonal=seasonal, xreg=data.frame(tc, step))
+m.pred 
+
+h=6
+
+pulse.new = ts(c(rep(0, n.fc1), 1, rep(0, n.fc+h-n.fc1-1)), start=c(1991,2), frequency=12) #expand the impulse function by h
+step.new = ts(c(rep(0, n.fc1), rep(1, n.fc+h-n.fc1)), start=c(1991,2), frequency=12) 
+
+tc.new = filter(pulse.new, filter=m11$coef[3],method='recursive',side=1)*m11$coef[4]
+newdata=data.frame(tc = tc.new[(n.fc+1):(n.fc+h)], step = step.new[(n.fc+1):(n.fc+h)])
+
+pp=predict(m.pred, h, newxreg=newdata)
+
+time = seq(1991+1/12, 2009+7/12, by=1/12)
+time.train = seq(1991+1/12, 2009+1/12, by=1/12)
+time.new = seq(2009+2/12, 2009+7/12, by=1/12)
+par(mfrow = c(1,1))
+plot(time, gas$GASREGW[1:223], xlab='Time', ylab='', xlim=c(1991, 2009), type='o', main='gas prediction after introduce fc intervention')
+points(time.train, exp(log(x.fc)-m11$residuals), type='o', pch=2, lty=2, col='red')
+abline(v=date[n.fc1+1], lty=2)
+
+points(time.new, exp(pp$pred), type='o', pch=2, lty=2, col='blue')
+legend.txt=c("Actual", "Fitted", "Predicted")
+legend("topleft", legend.txt, col=c("black", "red", "blue"), pch=c(1,2,3), lty=c(1,2,3))
+
+
+```
+
+
+
+
+##Covid-19 (Mar 2020)
+```{r}
+
+#covid.temp = ts(gas[,5][1:368],start=c(1991,2),frequency = 12)
+#covid.perm = ts(gas[,6][1:368],start=c(1991,2),frequency = 12)
+order = c(0,1,1)
+seasonal=list(order=c(0,1,2), period=12)
+
+n= 368
+n2 = 349
+covid.temp = ts(c(rep(0, n2), 1, rep(0, n-n2-1)), start=c(1991,2), frequency=12) #with order(1,0) gradually gone, with order(0,0) a one-time change
+covid.perm=ts(c(rep(0, n2), rep(1, n-n2)), start=c(1991,2), frequency=12)
+
+#Permanant change
+out10 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(covid.perm), transfer=list(c(0,0)), method="ML")
+out10
+
+#Temporary change
+out11 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(covid.temp), transfer=list(c(1,0)), method="ML")
+out11
+
+#Temporary &Permanant change
+out12 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(covid.temp, covid.perm), transfer=list(c(1,0), c(0,0)), method="ML")
+out12
+
+aic2 = c(out5.1$aic,out10$aic,out11$aic,out12$aic)
+# 
+which.min(aic2) #4
+coeftest(out12)
+
+# Total impact
+tc2 = filter(covid.temp, filter=out12$coef[4],method='recursive',side=1)*out12$coef[5]  #the impact of temporary change, exponential decay
+ls2 = ts(c(rep(0,n2), rep(out12$coef[6],n-n2)), start=c(1991,2), frequency=12)   #the impact of the permanent change
+
+#pdf("impact.pdf", width=8, height=6)
+plot(tc2+ls2, type='o', xlim=c(2020,2021), ylab='impact')
+
+```
+
+#fitted value after introduce covid intervention effect
+```{r}
+
+par(mfrow = c(1,1))
+plot(date[1:368], x.all[1:368], xlab = 'Time', ylab = '', ylim = rr, type = 'o', main = 'Fitted value after introduce covid effect')
+points(time(x), exp(logx-out12$residuals), type = 'o', pch = 2, lty = 2, col = 'red')
+abline(v=date[349], lty=2)
+legend.txt=c("Actual",  "Fitted")
+legend("topleft", legend.txt, col = c("black", "red"), pch = c(1,2), lty = c(1,2))
+
+```
+
+
+# Prediction without intervention before and after covid
+```{r}
+n=368
+n1=349
+h = n-n1
+
+x.covid = ts(logx[1:n1],start = c(1991,2),frequency = 12)
+
+out5.2 = arima(x.covid, order = c(0, 1, 1),seasonal = list(order = c(0, 1, 2),period=12))
+pp = predict(out5.2, h)
+
+#date = as.Date(gas[,1], tryFormats="%Y-%m-%d")
+date = time(x.all)
+pred = exp(pp$pred)
+pred.upp = exp(pp$pred+2*pp$se)
+pred.low = exp(pp$pred-2*pp$se)
+rr = range(c(gas$GASREGW[1:368], pred, pred.upp, pred.low))
+
+par(mfrow = c(1,1))
+plot(date[1:368], x.all[1:368], xlab = 'Time', ylab = '', ylim = rr, type = 'o', main = 'Fitted values and predictions before introduce covid effect')
+points(time(x.covid), exp(x.covid-out5.2$residuals), type = 'o', pch = 2, lty = 2, col = 'red')
+points(time(pred), pred, lty = 1, col = 'blue', type = 'o', pch = 2)
+abline(v=date[n1+1], lty=2)
+abline(v=date[n1+10], lty=2)
+legend.txt=c("Actual", "Predicted", "Fitted")
+legend("topleft", legend.txt, col = c("black", "blue", "red"), pch = c(1,2,2), lty = c(1,1,2))
+```
+
+
+##Iraq war, began on 20 March 2003
+```{r}
+war.temp = ts(gas$iraq_war_temp[1:368],start=c(1991,2),frequency = 12)
+war.perm = ts(gas$iraq_war_perm[1:368],start=c(1991,2),frequency = 12)
+
+#Permanant change
+out13 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(war.perm), transfer=list(c(0,0)), method="ML")
+out13
+
+#Temporary change
+out14 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(war.temp), transfer=list(c(1,0)), method="ML")
+out14
+
+#Temporary &Permanant change
+out15 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(war.temp, war.perm), transfer=list(c(1,0), c(0,0)), method="ML")
+out15
+
+aic3 = c(out5.1$aic,out13$aic,out14$aic,out15$aic)
+# -1089.469 -1087.601 -1086.281 -1085.761
+which.min(aic3) #1
+
+```
+
+##9/11
+```{r}
+attack.temp = ts(gas$attack_temp[1:368],start=c(1991,2),frequency = 12)
+attack.perm = ts(gas$attack_perm[1:368],start=c(1991,2),frequency = 12)
+
+#Permanant change
+out17 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(attack.perm), transfer=list(c(0,0)), method="ML")
+out17
+
+#Temporary change
+out18 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(attack.temp), transfer=list(c(1,0)), method="ML")
+out18
+
+#Temporary &Permanant change
+out19 = arimax(logx, order=order, seasonal = seasonal,xtransf=data.frame(attack.temp, attack.perm), transfer=list(c(1,0), c(0,0)), method="ML")
+out19
+
+aic4 = c(out5.1$aic,out17$aic,out18$aic,out19$aic)
+# 
+which.min(aic4) #2
+#n= 368
+#n4 = 127
+# Total impact
+tc4 = filter(attack.temp, filter=out18$coef[4],method='recursive',side=1)*out18$coef[5]  #the impact of temporary change, exponential decay
+#ls4 = ts(c(rep(0,127), rep(out18$coef[6],(368-127))), start=c(1991,2), frequency=12)   #the impact of the permanent change
+
+plot(tc4, type='o', xlim=c(2001,2003), ylab='impact')
+
+```
+
+
+
+#outlier identify
+```{r}
+x.all = ts(gas$GASREGW,start = c(1991,2),frequency = 12)
+out16 = arima(log(x.all), order = c(0, 1, 1),seasonal = list(order = c(0, 1, 2),period=12))
+
+locate.outliers(out16$residuals, pars=coefs2poly(out16))
+
+```
+
+
+
+##regression
+```{r}
+#1991-02-2021-11
+cpi = read.csv("cpi.csv")
+oil = read.csv("oil.csv")
+#sp = read.csv("sp500.csv")
+
+#full dataset is 1991-02 to 2021-11, since crude oil do not have data after 2021-11
+rgas = ts(gas$GASREGW[1:370],start=c(1991,2),frequency = 12)
+rcpi = ts(cpi$CPIAUCSL[530:899],start=c(1991,2),frequency = 12)
+roil = ts(oil$POILBREUSDM,start=c(1991,2),frequency = 12)
+#rsp = ts(sp[1:370,6],start=c(1991,2),frequency = 12)
+
+
+par(mfrow=c(3,1))
+plot(rgas, main='Monthly Gas price', xlab='', ylab='')
+plot(rcpi, main='Monthly CPI', xlab='', ylab='')
+plot(roil, main='Monthly crude oil price', xlab='', ylab='')
+#plot(rsp, main="Monthly S&P 500")
+
+pairs(cbind(Gas = rgas,CPI = rcpi, CrudeOil = roil))
+
+#n = length(rgas)
+#data = cbind(rgas, rcpi, roil)
+data = cbind(rgas, log(rcpi), log(roil))
+
+train = data[1:365, ]
+new.data = data[366:370, 2:3]
+lm = lm(rgas~., data = as.data.frame(train))
+summary(lm)
+e = lm$residuals
+
+plot(e, type='l')
+
+par(mfrow = c(1,2))
+acf(e,lag=60)
+pacf(e,lag=60)
+
+##estimate regression and ARMA parameters together
+rgas1 = log(rgas[1:365])
+rcpi1 = log(rcpi[1:365])
+roil1 = log(roil[1:365])
+
+out.r0 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(0,0,0))
+par(mfrow = c(1,2))
+acf(out.r0$residuals)
+pacf(out.r0$residuals)
+eacf(out.r0$residuals) #ARMA(2,10)
+
+#out.r1 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(2,0,10))
+#out.r1 
+#coeftest(out.r1)
+#out.r2 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(2,0,10),fixed = c(NA,NA,0,0,0,NA,0,0,0,0,0,0,NA,NA,NA))
+#out.r2 
+#out.r3 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(2,0,1))
+#out.r3 
+
+out.r4 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(0,1,0),seasonal=list(order=c(0,1,0), period=12))
+acf(out.r4$residuals,lag.max = 60)
+pacf(out.r4$residuals,lag.max = 60)#SAR(2),SMA(1)
+out.r5 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(0,1,0),seasonal=list(order=c(0,1,1), period=12))#SMA(1) is better
+acf(out.r5$residuals,lag.max = 60)
+pacf(out.r5$residuals,lag.max = 60)
+eacf(out.r5$residuals)#ARMA(0,1)
+out.r6 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(0,1,1),seasonal=list(order=c(0,1,1), period=12))
+
+coeftest(out.r6)
+#out.r7 = arima(rgas1, xreg=cbind(rcpi1, roil1), order=c(1,0,0),seasonal=list(order=c(0,1,2), period=12))
+
+par(mfrow = c(1,2))
+acf(out.r6$residuals,lag=60)
+pacf(out.r6$residuals,lag=60)
+#dev.off()
+Box.test(out.r6$residuals,type="Ljung",lag=12)
+
+```
+
+
+```{r}
+pp = predict(out.r6,5, newxreg=data.frame(new.data))		#prediction for e with time series model
+pred = exp(pp$pred)
+pred.upp = exp(pp$pred+2*pp$se)
+pred.low = exp(pp$pred-2*pp$se)
+pp1=predict(lm, as.data.frame(new.data), interval="prediction")		
+
+nn = length(rgas1)
+nt = 5	#forecast horizon
+nb = 30	#number of data points you want to plot
+tt = (nn-nb):nn	#indexes of data points you want to plot
+xxx = rgas[tt]		#data you want to plot
+rr = range(c(xxx, pred, pred.upp, pred.low, pp1))	#find the minimum and maximum y values in your plot
+
+#pdf('pred.pdf',width=8,height=4)
+par(mfrow = c(1,1))
+plot(tt, xxx, pch=1, xlim=c(nn-nb, nn+nt), ylim=rr, main='Gas price prediction using ts regresion', ylab='Gas price', xlab='Time')	
+lines(tt, xxx)	#observed values
+points(366:370, pred, pch=2, col='blue', type='o')	#ts predicted values
+lines(nn+1:nt, pred.low, lty=2, col='blue')	#upper bound of predicted interval
+lines(nn+1:nt, pred.upp, lty=2, col='blue')	#lower bound of predicted interval
+points(nn+0:nt, rgas[nn+0:nt], type='o')
+
+points(nn+1:nt, pp1[,1], pch=2, col='red', type='o')	#lm predicted values
+lines(nn+1:nt, pp1[,2], lty=2, col='red')	#upper bound of predicted interval
+lines(nn+1:nt, pp1[,3], lty=2, col='red')	#lower bound of predicted interval
+
+#points(nn+0:nt, rgas[nn+0:nt], type='o')
+
+legend.text=c("Actual value", "Prediction-lm", "Prediction-ts")
+legend("topleft", legend.text, col=c("black", "red", "blue"), lty = rep(1, 3), pch = c(1,2,2))
+
+
+```
+
